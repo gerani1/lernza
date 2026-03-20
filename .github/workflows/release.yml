@@ -1,17 +1,10 @@
 name: Release
 
 # Triggered by pushing a semver tag: v0.1.0, v1.0.0-beta.1, etc.
-# Builds WASM contracts, generates changelog from conventional commits,
-# credits contributors, and creates a GitHub Release.
 #
 # How to release:
-#   git tag v0.1.0
-#   git push origin v0.1.0
-#
-# Versioning (semver):
-#   v0.x.y  — pre-1.0 development (breaking changes bump minor)
-#   v1.0.0  — first stable release
-#   vX.Y.Z  — major.minor.patch after 1.0
+#   git tag v0.2.0
+#   git push origin v0.2.0
 
 on:
   push:
@@ -42,162 +35,135 @@ jobs:
       - name: Build optimized WASM contracts
         run: stellar contract build
 
-      - name: Get release info
-        id: info
+      - name: Generate release notes
+        id: notes
         run: |
+          set -euo pipefail
+
           TAG="${GITHUB_REF#refs/tags/}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -1 || echo "")
 
-          # Find previous tag
-          PREV_TAG=$(git tag --sort=-v:refname | grep -v "$TAG" | head -1 || echo "")
-          echo "prev_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+          echo "Tag: $TAG"
+          echo "Previous: ${PREV_TAG:-none (first release)}"
 
+          # ── Commit range ──────────────────────────────────
           if [ -n "$PREV_TAG" ]; then
             RANGE="${PREV_TAG}..${TAG}"
           else
             RANGE="$TAG"
           fi
-          echo "range=$RANGE" >> "$GITHUB_OUTPUT"
 
-          # Get WASM sizes
-          SIZES=""
+          # ── WASM binary sizes ─────────────────────────────
+          WASM_TABLE=""
           for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+            [ -f "$wasm" ] || continue
             NAME=$(basename "$wasm" .wasm)
-            SIZE=$(du -h "$wasm" | cut -f1 | xargs)
-            SIZES="${SIZES}| ${NAME} | ${SIZE} |\n"
+            BYTES=$(wc -c < "$wasm" | xargs)
+            if [ "$BYTES" -gt 1024 ]; then
+              KB=$(( BYTES / 1024 ))
+              SIZE="${KB} KB"
+            else
+              SIZE="${BYTES} B"
+            fi
+            WASM_TABLE="${WASM_TABLE}| ${NAME} | ${SIZE} |
+          "
           done
-          echo "wasm_sizes<<EOF" >> "$GITHUB_OUTPUT"
-          echo -e "$SIZES" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
 
-      - name: Generate changelog
-        id: changelog
-        run: |
-          TAG="${{ steps.info.outputs.tag }}"
-          PREV_TAG="${{ steps.info.outputs.prev_tag }}"
-
-          if [ -n "$PREV_TAG" ]; then
-            RANGE="${PREV_TAG}..${TAG}"
-          else
-            RANGE=""
+          if [ -z "$WASM_TABLE" ]; then
+            WASM_TABLE="| (no contracts built) | — |
+          "
           fi
 
-          # Categorize commits by conventional commit type
-          get_commits() {
-            local PREFIX=$1
-            local LABEL=$2
-            local COMMITS=""
+          # ── Changelog from conventional commits ───────────
+          # Parse each commit ONCE and categorize by prefix
+          FEAT="" FIX="" REFACTOR="" PERF="" DOCS="" TEST="" CI="" BUILD="" CHORE="" OTHER=""
 
-            if [ -n "$RANGE" ]; then
-              COMMITS=$(git log "$RANGE" --pretty=format:"- %s (%h)" --grep="^${PREFIX}" 2>/dev/null || echo "")
-            else
-              COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^${PREFIX}" 2>/dev/null || echo "")
-            fi
-
-            if [ -n "$COMMITS" ]; then
-              echo "### $LABEL"
-              echo ""
-              echo "$COMMITS"
-              echo ""
-            fi
-          }
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            case "$line" in
+              "feat("*|"feat:"*)     FEAT="${FEAT}${line}\n" ;;
+              "fix("*|"fix:"*)       FIX="${FIX}${line}\n" ;;
+              "refactor("*|"refactor:"*) REFACTOR="${REFACTOR}${line}\n" ;;
+              "perf("*|"perf:"*)     PERF="${PERF}${line}\n" ;;
+              "docs("*|"docs:"*)     DOCS="${DOCS}${line}\n" ;;
+              "test("*|"test:"*)     TEST="${TEST}${line}\n" ;;
+              "ci("*|"ci:"*)         CI="${CI}${line}\n" ;;
+              "build("*|"build:"*)   BUILD="${BUILD}${line}\n" ;;
+              "chore("*|"chore:"*)   CHORE="${CHORE}${line}\n" ;;
+              "style("*|"style:"*)   CHORE="${CHORE}${line}\n" ;;
+              "security("*|"security:"*) FIX="${FIX}${line}\n" ;;
+              "revert("*|"revert:"*) FIX="${FIX}${line}\n" ;;
+              *)                     OTHER="${OTHER}${line}\n" ;;
+            esac
+          done < <(git log "$RANGE" --pretty=format:"- %s (%h)" --no-merges 2>/dev/null)
 
           CHANGELOG=""
-          CHANGELOG="${CHANGELOG}$(get_commits "feat" "New Features")"
-          CHANGELOG="${CHANGELOG}$(get_commits "fix" "Bug Fixes")"
-          CHANGELOG="${CHANGELOG}$(get_commits "refactor" "Refactoring")"
-          CHANGELOG="${CHANGELOG}$(get_commits "perf" "Performance")"
-          CHANGELOG="${CHANGELOG}$(get_commits "security" "Security")"
-          CHANGELOG="${CHANGELOG}$(get_commits "docs" "Documentation")"
-          CHANGELOG="${CHANGELOG}$(get_commits "test" "Tests")"
-          CHANGELOG="${CHANGELOG}$(get_commits "ci" "CI/CD")"
-          CHANGELOG="${CHANGELOG}$(get_commits "build" "Build")"
-          CHANGELOG="${CHANGELOG}$(get_commits "chore" "Maintenance")"
+          [ -n "$FEAT" ]     && CHANGELOG="${CHANGELOG}### New Features\n\n${FEAT}\n"
+          [ -n "$FIX" ]      && CHANGELOG="${CHANGELOG}### Bug Fixes\n\n${FIX}\n"
+          [ -n "$REFACTOR" ] && CHANGELOG="${CHANGELOG}### Refactoring\n\n${REFACTOR}\n"
+          [ -n "$PERF" ]     && CHANGELOG="${CHANGELOG}### Performance\n\n${PERF}\n"
+          [ -n "$DOCS" ]     && CHANGELOG="${CHANGELOG}### Documentation\n\n${DOCS}\n"
+          [ -n "$TEST" ]     && CHANGELOG="${CHANGELOG}### Tests\n\n${TEST}\n"
+          [ -n "$CI" ]       && CHANGELOG="${CHANGELOG}### CI/CD\n\n${CI}\n"
+          [ -n "$BUILD" ]    && CHANGELOG="${CHANGELOG}### Dependencies\n\n${BUILD}\n"
+          [ -n "$CHORE" ]    && CHANGELOG="${CHANGELOG}### Maintenance\n\n${CHORE}\n"
+          [ -n "$OTHER" ]    && CHANGELOG="${CHANGELOG}### Other\n\n${OTHER}\n"
 
           if [ -z "$CHANGELOG" ]; then
-            if [ -n "$RANGE" ]; then
-              CHANGELOG=$(git log "$RANGE" --pretty=format:"- %s (%h)")
+            CHANGELOG="No categorized changes.\n"
+          fi
+
+          # ── Contributors ──────────────────────────────────
+          CONTRIBUTORS=""
+          while IFS= read -r author; do
+            [ -z "$author" ] && continue
+            EMAIL=$(git log "$RANGE" --author="$author" --pretty=format:"%aE" --no-merges | head -1)
+            GH_USER=$(echo "$EMAIL" | grep -oP '\d+\+\K[^@]+(?=@users.noreply.github.com)' 2>/dev/null || echo "")
+            if [ -n "$GH_USER" ]; then
+              CONTRIBUTORS="${CONTRIBUTORS}- @${GH_USER}\n"
             else
-              CHANGELOG=$(git log --pretty=format:"- %s (%h)" -20)
+              [ "$author" = "dependabot[bot]" ] && continue
+              CONTRIBUTORS="${CONTRIBUTORS}- ${author}\n"
             fi
-          fi
+          done < <(git log "$RANGE" --pretty=format:"%aN" --no-merges | sort -u)
 
-          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$CHANGELOG" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
-      - name: Get contributors
-        id: contributors
-        run: |
-          TAG="${{ steps.info.outputs.tag }}"
-          PREV_TAG="${{ steps.info.outputs.prev_tag }}"
-
-          if [ -n "$PREV_TAG" ]; then
-            RANGE="${PREV_TAG}..${TAG}"
-          else
-            RANGE=""
-          fi
-
-          # Get unique contributors for this release
-          if [ -n "$RANGE" ]; then
-            AUTHORS=$(git log "$RANGE" --pretty=format:"%aN" | sort -u)
-          else
-            AUTHORS=$(git log --pretty=format:"%aN" | sort -u)
-          fi
-
-          # Convert to GitHub mentions where possible
-          CONTRIBUTOR_LIST=""
-          while IFS= read -r AUTHOR; do
-            if [ -n "$AUTHOR" ]; then
-              # Try to find GitHub username from commit
-              if [ -n "$RANGE" ]; then
-                EMAIL=$(git log "$RANGE" --author="$AUTHOR" --pretty=format:"%aE" | head -1)
-              else
-                EMAIL=$(git log --author="$AUTHOR" --pretty=format:"%aE" | head -1)
-              fi
-              # Check if it's a noreply GitHub email
-              GH_USER=$(echo "$EMAIL" | grep -oP '\d+\+\K[^@]+(?=@users.noreply.github.com)' || echo "")
-              if [ -n "$GH_USER" ]; then
-                CONTRIBUTOR_LIST="${CONTRIBUTOR_LIST}- @${GH_USER}\n"
-              else
-                CONTRIBUTOR_LIST="${CONTRIBUTOR_LIST}- ${AUTHOR}\n"
-              fi
+          # ── Build the full body ───────────────────────────
+          {
+            echo "body<<RELEASE_EOF"
+            echo "## What's Changed"
+            echo ""
+            echo -e "$CHANGELOG"
+            echo "## Contract Binaries"
+            echo ""
+            echo "| Contract | Size |"
+            echo "|----------|------|"
+            echo -e "$WASM_TABLE"
+            echo "Deploy to Stellar testnet:"
+            echo '```bash'
+            echo 'stellar contract deploy --wasm <contract>.wasm --network testnet --source <identity>'
+            echo '```'
+            echo ""
+            echo "## Contributors"
+            echo ""
+            echo "Thank you to everyone who contributed to this release:"
+            echo ""
+            echo -e "$CONTRIBUTORS"
+            if [ -n "$PREV_TAG" ]; then
+              echo "---"
+              echo ""
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
             fi
-          done <<< "$AUTHORS"
+            echo "RELEASE_EOF"
+          } >> "$GITHUB_OUTPUT"
 
-          echo "list<<EOF" >> "$GITHUB_OUTPUT"
-          echo -e "$CONTRIBUTOR_LIST" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ steps.notes.outputs.tag }}
+          body: ${{ steps.notes.outputs.body }}
           files: |
             target/wasm32-unknown-unknown/release/*.wasm
-          body: |
-            ## What's Changed
-
-            ${{ steps.changelog.outputs.changelog }}
-
-            ## Contract Binaries
-
-            | Contract | Size |
-            |----------|------|
-            ${{ steps.info.outputs.wasm_sizes }}
-
-            Deploy to Stellar testnet:
-            ```bash
-            stellar contract deploy --wasm <contract>.wasm --network testnet --source <identity>
-            ```
-
-            ## Contributors
-
-            Thank you to everyone who contributed to this release:
-
-            ${{ steps.contributors.outputs.list }}
-
-            ---
-
-            **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.info.outputs.prev_tag }}...${{ steps.info.outputs.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
