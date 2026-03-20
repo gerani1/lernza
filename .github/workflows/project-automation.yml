@@ -1,47 +1,49 @@
 name: Project Automation
 
-# Bidirectional sync between GitHub Issues/PRs and the "Lernza Roadmap" project board.
+# Handles cases that built-in GitHub Project workflows can't cover.
 #
-# Board statuses: Backlog | Todo | In Progress | In Review | Done | Invalid
+# Built-in workflows (enable in project settings UI) handle:
+#   Item added to project   → Backlog
+#   Item closed             → Done
+#   Item reopened           → Todo
+#   PR linked to issue      → In Review
+#   PR merged               → Done
+#   Auto-close issue        → board "Done" closes the issue (bidirectional)
+#   Code changes requested  → In Progress
+#   Code review approved    → In Review
+#   Auto-add to project     → adds new repo issues automatically
 #
-# Automation rules:
-#   Issue opened          → add to project, set Todo
-#   Issue assigned        → set In Progress
-#   Issue unassigned      → set Todo (if no assignees left)
-#   Issue closed          → set Done (completed) or Invalid (not_planned)
-#   Issue reopened        → set Todo
-#   PR opened/ready       → linked issues → In Review
-#   PR merged             → linked issues → Done
-#   PR closed (not merged)→ linked issues → Todo
+# This workflow handles what built-ins can't:
+#   Issue assigned          → In Progress
+#   Issue unassigned        → Todo (if no assignees left)
+#   Issue closed not_planned→ Invalid (overrides built-in "Done")
+#   PR closed without merge → linked issues back to Todo
 
 on:
   issues:
-    types: [opened, assigned, unassigned, closed, reopened]
+    types: [assigned, unassigned, closed]
   pull_request:
-    types: [opened, ready_for_review, closed]
+    types: [closed]
 
 env:
   GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
   PROJECT_OWNER: lernza
   PROJECT_NUMBER: "1"
-  # Status field and option IDs (from project board configuration)
   STATUS_FIELD_ID: "PVTSSF_lADOC20SDc4BRpIZzg_aUc4"
   PROJECT_ID: "PVT_kwDOC20SDc4BRpIZ"
-  STATUS_BACKLOG: "11dd4cec"
   STATUS_TODO: "fb5b0bc3"
   STATUS_IN_PROGRESS: "8b6279b2"
-  STATUS_IN_REVIEW: "b3cfa0b7"
-  STATUS_DONE: "98fbbd58"
   STATUS_INVALID: "bf0b7b0b"
 
 jobs:
-  # ─── Issue Events ───────────────────────────────────────────────
-  issue-opened:
-    if: github.event_name == 'issues' && github.event.action == 'opened'
+  # ─── Issue assigned → In Progress ──────────────────────────────
+  issue-assigned:
+    if: github.event_name == 'issues' && github.event.action == 'assigned'
     runs-on: ubuntu-latest
     steps:
-      - name: Add to project and set Todo
+      - name: Move to In Progress
         run: |
+          # Ensure issue is in project (add if missing)
           ITEM_ID=$(gh project item-add $PROJECT_NUMBER \
             --owner $PROJECT_OWNER \
             --url "${{ github.event.issue.html_url }}" \
@@ -53,45 +55,21 @@ jobs:
                 projectId: \"$PROJECT_ID\"
                 itemId: \"$ITEM_ID\"
                 fieldId: \"$STATUS_FIELD_ID\"
-                value: { singleSelectOptionId: \"$STATUS_TODO\" }
-              }) { projectV2Item { id } }
-            }"
-
-  issue-assigned:
-    if: github.event_name == 'issues' && github.event.action == 'assigned'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Move to In Progress
-        run: |
-          ITEM_ID=$(gh project item-list $PROJECT_NUMBER \
-            --owner $PROJECT_OWNER --limit 200 --format json | \
-            jq -r --arg N "${{ github.event.issue.number }}" \
-            '.items[] | select(.content.number == ($N|tonumber)) | .id')
-
-          if [ -z "$ITEM_ID" ]; then
-            ITEM_ID=$(gh project item-add $PROJECT_NUMBER \
-              --owner $PROJECT_OWNER \
-              --url "${{ github.event.issue.html_url }}" \
-              --format json | jq -r '.id')
-          fi
-
-          gh api graphql -f query="
-            mutation {
-              updateProjectV2ItemFieldValue(input: {
-                projectId: \"$PROJECT_ID\"
-                itemId: \"$ITEM_ID\"
-                fieldId: \"$STATUS_FIELD_ID\"
                 value: { singleSelectOptionId: \"$STATUS_IN_PROGRESS\" }
               }) { projectV2Item { id } }
             }"
 
+          echo "Moved #${{ github.event.issue.number }} to In Progress"
+
+  # ─── Issue unassigned → Todo (if no assignees left) ────────────
   issue-unassigned:
     if: github.event_name == 'issues' && github.event.action == 'unassigned'
     runs-on: ubuntu-latest
     steps:
-      - name: Move back to Todo if no assignees left
+      - name: Move back to Todo if no assignees remain
         run: |
-          ASSIGNEE_COUNT=$(echo '${{ toJson(github.event.issue.assignees) }}' | jq 'length')
+          ASSIGNEE_COUNT=$(gh issue view ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} --json assignees -q '.assignees | length')
 
           if [ "$ASSIGNEE_COUNT" -eq 0 ]; then
             ITEM_ID=$(gh project item-list $PROJECT_NUMBER \
@@ -99,7 +77,7 @@ jobs:
               jq -r --arg N "${{ github.event.issue.number }}" \
               '.items[] | select(.content.number == ($N|tonumber)) | .id')
 
-            if [ -n "$ITEM_ID" ]; then
+            if [ -n "$ITEM_ID" ] && [ "$ITEM_ID" != "null" ]; then
               gh api graphql -f query="
                 mutation {
                   updateProjectV2ItemFieldValue(input: {
@@ -109,150 +87,48 @@ jobs:
                     value: { singleSelectOptionId: \"$STATUS_TODO\" }
                   }) { projectV2Item { id } }
                 }"
+
+              echo "Moved #${{ github.event.issue.number }} back to Todo (no assignees)"
             fi
-          fi
-
-  issue-closed:
-    if: github.event_name == 'issues' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Move to Done or Invalid
-        run: |
-          ITEM_ID=$(gh project item-list $PROJECT_NUMBER \
-            --owner $PROJECT_OWNER --limit 200 --format json | \
-            jq -r --arg N "${{ github.event.issue.number }}" \
-            '.items[] | select(.content.number == ($N|tonumber)) | .id')
-
-          if [ -z "$ITEM_ID" ]; then
-            echo "Issue not in project, skipping"
-            exit 0
-          fi
-
-          # closed as "not_planned" → Invalid, otherwise → Done
-          STATE_REASON="${{ github.event.issue.state_reason }}"
-
-          if [ "$STATE_REASON" = "not_planned" ]; then
-            TARGET="$STATUS_INVALID"
           else
-            TARGET="$STATUS_DONE"
+            echo "Issue still has $ASSIGNEE_COUNT assignee(s), staying In Progress"
           fi
 
-          gh api graphql -f query="
-            mutation {
-              updateProjectV2ItemFieldValue(input: {
-                projectId: \"$PROJECT_ID\"
-                itemId: \"$ITEM_ID\"
-                fieldId: \"$STATUS_FIELD_ID\"
-                value: { singleSelectOptionId: \"$TARGET\" }
-              }) { projectV2Item { id } }
-            }"
-
-  issue-reopened:
-    if: github.event_name == 'issues' && github.event.action == 'reopened'
+  # ─── Issue closed as "not planned" → Invalid ───────────────────
+  # The built-in "Item closed" workflow sets Done for all closes.
+  # This overrides that for issues closed as "not planned".
+  issue-closed-not-planned:
+    if: >-
+      github.event_name == 'issues' &&
+      github.event.action == 'closed' &&
+      github.event.issue.state_reason == 'not_planned'
     runs-on: ubuntu-latest
     steps:
-      - name: Move back to Todo
+      - name: Override to Invalid
         run: |
+          # Small delay to let the built-in workflow set "Done" first, then override
+          sleep 3
+
           ITEM_ID=$(gh project item-list $PROJECT_NUMBER \
             --owner $PROJECT_OWNER --limit 200 --format json | \
             jq -r --arg N "${{ github.event.issue.number }}" \
             '.items[] | select(.content.number == ($N|tonumber)) | .id')
 
-          if [ -n "$ITEM_ID" ]; then
+          if [ -n "$ITEM_ID" ] && [ "$ITEM_ID" != "null" ]; then
             gh api graphql -f query="
               mutation {
                 updateProjectV2ItemFieldValue(input: {
                   projectId: \"$PROJECT_ID\"
                   itemId: \"$ITEM_ID\"
                   fieldId: \"$STATUS_FIELD_ID\"
-                  value: { singleSelectOptionId: \"$STATUS_TODO\" }
+                  value: { singleSelectOptionId: \"$STATUS_INVALID\" }
                 }) { projectV2Item { id } }
               }"
+
+            echo "Moved #${{ github.event.issue.number }} to Invalid (closed as not planned)"
           fi
 
-  # ─── Pull Request Events ────────────────────────────────────────
-  pr-opened:
-    if: >-
-      github.event_name == 'pull_request' &&
-      (github.event.action == 'opened' || github.event.action == 'ready_for_review')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Move linked issues to In Review
-        run: |
-          # Extract issue numbers from PR body ("Closes #N", "Fixes #N", "Resolves #N")
-          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} --json body -q '.body')
-
-          ISSUE_NUMS=$(echo "$PR_BODY" | \
-            grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#[0-9]+' | \
-            grep -oE '[0-9]+' || true)
-
-          if [ -z "$ISSUE_NUMS" ]; then
-            echo "No linked issues found in PR body"
-            exit 0
-          fi
-
-          for NUM in $ISSUE_NUMS; do
-            ITEM_ID=$(gh project item-list $PROJECT_NUMBER \
-              --owner $PROJECT_OWNER --limit 200 --format json | \
-              jq -r --arg N "$NUM" \
-              '.items[] | select(.content.number == ($N|tonumber)) | .id')
-
-            if [ -n "$ITEM_ID" ]; then
-              gh api graphql -f query="
-                mutation {
-                  updateProjectV2ItemFieldValue(input: {
-                    projectId: \"$PROJECT_ID\"
-                    itemId: \"$ITEM_ID\"
-                    fieldId: \"$STATUS_FIELD_ID\"
-                    value: { singleSelectOptionId: \"$STATUS_IN_REVIEW\" }
-                  }) { projectV2Item { id } }
-                }"
-              echo "Moved #$NUM to In Review"
-            fi
-          done
-
-  pr-merged:
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.action == 'closed' &&
-      github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
-    steps:
-      - name: Move linked issues to Done
-        run: |
-          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} --json body -q '.body')
-
-          ISSUE_NUMS=$(echo "$PR_BODY" | \
-            grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#[0-9]+' | \
-            grep -oE '[0-9]+' || true)
-
-          if [ -z "$ISSUE_NUMS" ]; then
-            echo "No linked issues found in PR body"
-            exit 0
-          fi
-
-          for NUM in $ISSUE_NUMS; do
-            ITEM_ID=$(gh project item-list $PROJECT_NUMBER \
-              --owner $PROJECT_OWNER --limit 200 --format json | \
-              jq -r --arg N "$NUM" \
-              '.items[] | select(.content.number == ($N|tonumber)) | .id')
-
-            if [ -n "$ITEM_ID" ]; then
-              gh api graphql -f query="
-                mutation {
-                  updateProjectV2ItemFieldValue(input: {
-                    projectId: \"$PROJECT_ID\"
-                    itemId: \"$ITEM_ID\"
-                    fieldId: \"$STATUS_FIELD_ID\"
-                    value: { singleSelectOptionId: \"$STATUS_DONE\" }
-                  }) { projectV2Item { id } }
-                }"
-              echo "Moved #$NUM to Done"
-            fi
-          done
-
+  # ─── PR closed without merge → linked issues back to Todo ─────
   pr-closed-not-merged:
     if: >-
       github.event_name == 'pull_request' &&
@@ -270,6 +146,7 @@ jobs:
             grep -oE '[0-9]+' || true)
 
           if [ -z "$ISSUE_NUMS" ]; then
+            echo "No linked issues found in PR body"
             exit 0
           fi
 
@@ -279,7 +156,7 @@ jobs:
               jq -r --arg N "$NUM" \
               '.items[] | select(.content.number == ($N|tonumber)) | .id')
 
-            if [ -n "$ITEM_ID" ]; then
+            if [ -n "$ITEM_ID" ] && [ "$ITEM_ID" != "null" ]; then
               gh api graphql -f query="
                 mutation {
                   updateProjectV2ItemFieldValue(input: {
@@ -289,6 +166,6 @@ jobs:
                     value: { singleSelectOptionId: \"$STATUS_TODO\" }
                   }) { projectV2Item { id } }
                 }"
-              echo "Moved #$NUM back to Todo"
+              echo "Moved #$NUM back to Todo (PR closed without merge)"
             fi
           done
