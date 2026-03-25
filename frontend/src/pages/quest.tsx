@@ -1,238 +1,407 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState } from "react"
+import { useParams, useNavigate } from "react-router-dom"
 import {
   ArrowLeft,
-  Loader2,
-  AlertCircle,
+  Plus,
   Users,
+  Target,
+  Coins,
+  CheckCircle2,
+  Circle,
+  UserPlus,
+  Sparkles,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { useInView } from "@/hooks/use-animations"
-import { useWallet } from "@/hooks/use-wallet"
+import { useInView, useCountUp } from "@/hooks/use-animations"
+import { MOCK_QUESTS, MOCK_MILESTONES, MOCK_ENROLLEES, MOCK_COMPLETIONS } from "@/lib/mock-data"
 import { formatTokens } from "@/lib/utils"
-import { questClient } from "@/lib/contracts/quest"
-import type { QuestInfo } from "@/lib/contracts/quest"
-import { milestoneClient } from "@/lib/contracts/milestone"
-import type { MilestoneInfo } from "@/lib/contracts/milestone"
-import { rewardsClient } from "@/lib/contracts/rewards"
-
-// Sub-components
-import { QuestHeader } from "@/components/quest-detail/quest-header"
-import { QuestStats } from "@/components/quest-detail/quest-stats"
-import { QuestMilestones } from "@/components/quest-detail/quest-milestones"
-import { QuestEnrollees } from "@/components/quest-detail/quest-enrollees"
-
-interface QuestViewProps {
-  questId: number
-  onBack: () => void
-}
+import { useToast } from "@/hooks/use-toast"
+import { ToastContainer } from "@/components/toast"
+import { ShareButton } from "@/components/share-button"
 
 type Tab = "milestones" | "enrollees"
 
-export function QuestView({ questId, onBack }: QuestViewProps) {
-  const { address, connected } = useWallet()
+export function QuestView() {
+  const { id } = useParams()
+  const questId = Number(id)
+  const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<Tab>("milestones")
   const [expandedMilestone, setExpandedMilestone] = useState<number | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [quest, setQuest] = useState<QuestInfo | null>(null)
-  const [milestones, setMilestones] = useState<MilestoneInfo[]>([])
-  const [enrollees, setEnrollees] = useState<string[]>([])
-  const [completions, setCompletions] = useState<number>(0)
-  const [poolBalance, setPoolBalance] = useState<bigint>(0n)
-  
+
+  const ws = MOCK_QUESTS.find(w => w.id === questId)
+  const milestones = MOCK_MILESTONES[questId] || []
+  const enrollees = MOCK_ENROLLEES[questId] || []
+  const completions = MOCK_COMPLETIONS[questId] || []
+  const { toasts, addToast, removeToast } = useToast()
+
   const [statsRef, statsInView] = useInView()
   const [contentRef, contentInView] = useInView()
 
-  const fetchQuestDetails = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const q = await questClient.getQuest(questId)
-      if (!q) {
-        setError("Quest not found.")
-        setLoading(false)
-        return
-      }
-      setQuest(q)
+  const totalReward = milestones.reduce((sum, m) => sum + m.rewardAmount, 0)
+  const completedMilestones = new Set(completions.filter(c => c.completed).map(c => c.milestoneId))
+    .size
+  const isComplete = completedMilestones === milestones.length && milestones.length > 0
+  const earnedReward = milestones
+    .filter(m => completions.some(c => c.milestoneId === m.id && c.completed))
+    .reduce((sum, m) => sum + m.rewardAmount, 0)
 
-      const [ms, enrs, balance] = await Promise.all([
-        milestoneClient.getMilestones(questId),
-        questClient.getEnrollees(questId),
-        rewardsClient.getPoolBalance(questId),
-      ])
+  const enrolleesCount = useCountUp(enrollees.length, 400, statsInView)
+  const milestonesCount = useCountUp(milestones.length, 400, statsInView)
+  const poolBalance = useCountUp(ws?.poolBalance ?? 0, 800, statsInView)
+  const totalRewardCount = useCountUp(totalReward, 800, statsInView)
 
-      setMilestones(ms)
-      setEnrollees(enrs)
-      setPoolBalance(balance)
-
-      if (address) {
-        const completedCount = await milestoneClient.getEnrolleeCompletions(questId, address)
-        setCompletions(completedCount)
-      }
-    } catch (err) {
-      console.error("Failed to fetch quest details:", err)
-      setError("Failed to load quest details from the network.")
-    } finally {
-      setLoading(false)
-    }
-  }, [questId, address])
-
-  useEffect(() => {
-    fetchQuestDetails()
-  }, [fetchQuestDetails])
-
-  const totalReward = milestones.reduce((sum, m) => sum + m.rewardAmount, 0n)
-  const earnedReward = completions > 0 && milestones.length > 0 
-    ? (totalReward * BigInt(completions)) / BigInt(milestones.length) 
-    : 0n
-
-  if (loading) {
+  if (!ws) {
     return (
-      <div className="mx-auto max-w-6xl px-4 sm:px-6 py-20 text-center flex flex-col items-center">
-        <Loader2 className="h-10 w-10 animate-spin mb-4" />
-        <p className="text-sm font-bold uppercase tracking-widest text-muted-foreground animate-pulse">
-            Fetching decentralized quest data...
-        </p>
-      </div>
-    )
-  }
-
-  if (error || !quest) {
-    return (
-      <div className="mx-auto max-w-6xl px-4 sm:px-6 py-20 text-center">
-        <div className="w-16 h-16 bg-destructive/10 border-[3px] border-black flex items-center justify-center mb-6 mx-auto animate-shake">
-          <AlertCircle className="h-8 w-8 text-destructive" />
-        </div>
-        <h2 className="text-2xl font-black mb-4">{error || "Quest not found"}</h2>
-        <Button variant="outline" onClick={onBack} className="border-black neo-lift">
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Go back to Dashboard
+      <div className="mx-auto max-w-6xl px-4 py-20 text-center sm:px-6">
+        <h2 className="mb-4 text-2xl font-black">Quest not found</h2>
+        <Button variant="outline" onClick={() => navigate("/dashboard")}>
+          Go back
         </Button>
       </div>
     )
   }
 
   return (
-    <div className="relative mx-auto max-w-6xl px-4 sm:px-6 py-8">
-      {/* Background Decor */}
-      <div className="absolute inset-0 bg-grid-dots pointer-events-none opacity-20" />
+    <div className="relative mx-auto max-w-6xl px-4 py-8 sm:px-6">
+      {/* Background */}
+      <div className="bg-grid-dots pointer-events-none absolute inset-0 opacity-30" />
 
-      {/* Navigation */}
+      {/* Back button */}
       <button
-        onClick={onBack}
-        className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-muted-foreground hover:text-foreground mb-6 transition-all cursor-pointer group hover:translate-x-[-4px]"
+        onClick={() => navigate("/dashboard")}
+        className="text-muted-foreground hover:text-foreground group mb-6 flex cursor-pointer items-center gap-2 text-sm font-bold transition-colors"
       >
-        <div className="w-8 h-8 border-[2px] border-black bg-white shadow-[2px_2px_0_#000] flex items-center justify-center neo-press group-hover:bg-primary transition-colors">
-          <ArrowLeft className="h-4 w-4" />
+        <div className="border-border bg-background neo-press group-hover:bg-primary flex h-7 w-7 items-center justify-center border-[2px] shadow-[2px_2px_0_var(--color-border)] transition-colors hover:shadow-[3px_3px_0_var(--color-border)] active:shadow-[1px_1px_0_var(--color-border)]">
+          <ArrowLeft className="h-3.5 w-3.5" />
         </div>
         Back to Dashboard
       </button>
 
-      {/* 1. Header Section */}
-      <QuestHeader 
-        quest={quest}
-        address={address}
-        isComplete={completions === milestones.length && milestones.length > 0}
-        onAddEnrollee={() => alert("Owner only: Add Enrollee via wallet sign")}
-        onAddMilestone={() => alert("Owner only: Define new learning goal")}
-        onEdit={() => alert("Edit quest metadata")}
-        onFund={() => alert("Funding Reward Pool: requires USDC transfer")}
-      />
+      {/* Quest header card */}
+      <div className="bg-background border-border animate-fade-in-up relative mb-8 overflow-hidden border-[3px] shadow-[6px_6px_0_var(--color-border)]">
+        {/* Header bar */}
+        <div className="bg-primary border-border flex items-center justify-between border-b-[3px] px-6 py-3">
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-black tracking-wider uppercase">Quest Details</span>
+            {isComplete && (
+              <Badge variant="success" className="gap-1">
+                <Sparkles className="h-3 w-3" />
+                Complete
+              </Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="bg-success border-border h-2.5 w-2.5 border" />
+            <span className="text-xs font-bold">Live</span>
+          </div>
+        </div>
 
-      {/* 2. Stats Section */}
-      <QuestStats 
-        enrollees={enrollees.length}
-        milestones={milestones.length}
-        poolBalance={poolBalance}
-        totalReward={totalReward}
-        deadlineDays={30}
-        statsInView={statsInView}
-      />
-      
-      <div ref={statsRef} />
+        <div className="relative p-6">
+          <div className="bg-diagonal-lines pointer-events-none absolute inset-0 opacity-20" />
+          <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h1 className="text-2xl font-black sm:text-3xl">{ws.name}</h1>
+              <p className="text-muted-foreground mt-1 max-w-xl text-sm">{ws.description}</p>
+            </div>
+            <div className="flex flex-shrink-0 gap-3">
+              <Button variant="outline" size="sm" className="shimmer-on-hover">
+                <UserPlus className="h-4 w-4" />
+                Add Enrollee
+              </Button>
+              <Button size="sm" className="shimmer-on-hover">
+                <Plus className="h-4 w-4" />
+                Add Milestone
+              </Button>
+              <ShareButton questId={questId} questName={ws.name} onToast={addToast} />
+            </div>
+          </div>
+        </div>
+      </div>
 
-      {/* 3. User Progress Bar (Enrollees Only) */}
-      {connected && address && enrollees.includes(address) && (
-        <div className="mb-8 animate-fade-in-up stagger-3">
-          <div className="bg-white border-[3px] border-black shadow-[4px_4px_0_#000] p-6 relative overflow-hidden group">
-            <div className="absolute right-[-20px] top-[-20px] w-24 h-24 bg-success/5 rotate-12 transition-transform group-hover:scale-110" />
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <span className="text-sm font-black uppercase tracking-widest">Your Achievement Progress</span>
-                {earnedReward > 0n && (
-                   <div className="flex items-center gap-2 mt-1">
-                      <div className="w-2 h-2 bg-success rounded-full animate-pulse" />
-                      <p className="text-xs font-bold text-green-700">
-                        {formatTokens(Number(earnedReward))} USDC ready for distribution
-                      </p>
-                   </div>
+      {/* Stats row */}
+      <div ref={statsRef} className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
+        {[
+          {
+            icon: Users,
+            label: "Enrollees",
+            value: enrolleesCount,
+            bg: "bg-primary",
+          },
+          {
+            icon: Target,
+            label: "Milestones",
+            value: milestonesCount,
+            bg: "bg-primary",
+          },
+          {
+            icon: Coins,
+            label: "Pool Balance",
+            value: formatTokens(poolBalance),
+            bg: "bg-primary",
+          },
+          {
+            icon: Coins,
+            label: "Total Rewards",
+            value: formatTokens(totalRewardCount),
+            bg: "bg-success",
+          },
+        ].map((stat, i) => (
+          <div
+            key={stat.label}
+            className={`reveal-up ${statsInView ? "in-view" : ""}`}
+            style={{ transitionDelay: `${i * 100}ms` }}
+          >
+            <Card className="neo-lift hover:shadow-[7px_7px_0_var(--color-border)] active:shadow-[2px_2px_0_var(--color-border)]">
+              <CardContent className="flex items-center gap-3 p-4">
+                <div
+                  className={`h-10 w-10 ${stat.bg} border-border flex flex-shrink-0 items-center justify-center border-[2px] shadow-[2px_2px_0_var(--color-border)]`}
+                >
+                  <stat.icon className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs font-bold">{stat.label}</p>
+                  <p className="text-lg font-black tabular-nums">{stat.value}</p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        ))}
+      </div>
+
+      {/* Progress section */}
+      {milestones.length > 0 && (
+        <div className="animate-fade-in-up stagger-3 mb-8">
+          <div className="bg-background border-border border-[3px] p-5 shadow-[4px_4px_0_var(--color-border)]">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="text-sm font-black">Overall Progress</span>
+              <div className="flex items-center gap-3">
+                {earnedReward > 0 && (
+                  <span className="text-xs font-bold text-green-700">
+                    +{formatTokens(earnedReward)} USDC earned
+                  </span>
                 )}
-              </div>
-              <div className="text-right">
-                <span className="text-2xl font-black tabular-nums">
-                  {completions === milestones.length ? 100 : Math.round((completions / milestones.length) * 100)}%
+                <span className="text-sm font-black">
+                  {completedMilestones}/{milestones.length}
                 </span>
-                <p className="text-[10px] font-black opacity-50 uppercase tracking-tighter">Verified Goals</p>
               </div>
             </div>
-            <Progress value={completions} max={milestones.length} className="h-3 border-[2px] border-black" />
+            <Progress value={completedMilestones} max={milestones.length} />
           </div>
         </div>
       )}
 
-      {/* 4. Tabs & Content */}
-      <div className="flex gap-0 border-b-[3px] border-black mb-8 pt-4" ref={contentRef}>
-        {(["milestones", "enrollees"] as Tab[]).map((tab) => (
+      {/* Tabs */}
+      <div className="border-border mb-6 flex gap-0 border-b-[3px]" ref={contentRef}>
+        {(["milestones", "enrollees"] as Tab[]).map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`px-8 py-3.5 text-xs font-black uppercase tracking-widest border-[3px] border-b-0 transition-all capitalize cursor-pointer -mb-[3px] relative ${
+            className={`-mb-[3px] cursor-pointer border-[3px] border-b-0 px-6 py-3 text-sm font-black tracking-wider capitalize uppercase transition-all ${
               activeTab === tab
-                ? "border-black bg-primary translate-y-[-2px] shadow-[3px_-3px_0_#000]"
-                : "border-transparent text-muted-foreground hover:text-foreground hover:bg-secondary/20"
+                ? "border-border bg-primary shadow-[2px_-2px_0_var(--color-border)]"
+                : "hover:bg-secondary border-transparent"
             }`}
           >
             {tab}
-            <span className="ml-2 text-[10px] opacity-60">
-              [{tab === "milestones" ? milestones.length : enrollees.length}]
+            <span className="ml-2 text-xs opacity-60">
+              ({tab === "milestones" ? milestones.length : enrollees.length})
             </span>
           </button>
         ))}
       </div>
 
-      <div className={`transition-all duration-300 ${contentInView ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
-        {activeTab === "milestones" ? (
-          <QuestMilestones 
-            milestones={milestones}
-            completions={completions}
-            isOwner={quest.owner === address}
-            expandedMilestone={expandedMilestone}
-            setExpandedMilestone={setExpandedMilestone}
-            onAddMilestone={() => alert("New Milestone logic")}
-            onVerify={(id) => alert(`Owner only: Verify completion of Step ${id + 1}`)}
-          />
-        ) : (
-          <QuestEnrollees 
-            enrollees={enrollees}
-            isOwner={quest.owner === address}
-            onAddEnrollee={() => alert("Invite Enrollee logic")}
-            totalMilestones={milestones.length}
-          />
-        )}
-      </div>
+      {/* Milestones tab */}
+      {activeTab === "milestones" && (
+        <div className="space-y-4">
+          {milestones.length === 0 ? (
+            <Card className="animate-fade-in-up">
+              <CardContent className="flex flex-col items-center py-12 text-center">
+                <div className="bg-primary border-border mb-4 flex h-14 w-14 items-center justify-center border-[3px] shadow-[4px_4px_0_var(--color-border)]">
+                  <Target className="h-6 w-6" />
+                </div>
+                <h3 className="mb-2 font-black">No milestones yet</h3>
+                <p className="text-muted-foreground mb-4 text-sm">
+                  Add milestones to define learning goals.
+                </p>
+                <Button size="sm" className="shimmer-on-hover">
+                  <Plus className="h-4 w-4" />
+                  Add Milestone
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            milestones.map((ms, i) => {
+              const isCompleted = completions.some(c => c.milestoneId === ms.id && c.completed)
+              const completedBy = completions
+                .filter(c => c.milestoneId === ms.id && c.completed)
+                .map(c => c.enrollee)
+              const isExpanded = expandedMilestone === ms.id
 
-      {/* Floating Action Button (for non-enrolled users) */}
-      {connected && address && !enrollees.includes(address) && quest.owner !== address && (
-        <div className="fixed bottom-8 right-8 z-50 animate-bounce-custom">
-            <Button size="lg" className="h-16 px-10 rounded-none shadow-[8px_8px_0_#000] hover:shadow-[10px_10px_0_#000] border-black border-[3px] active:translate-y-1 active:shadow-[2px_2px_0_#000] transition-all">
-                <Users className="h-5 w-5 mr-3" />
-                Enroll in Quest
-            </Button>
+              return (
+                <div
+                  key={ms.id}
+                  className={`reveal-up ${contentInView ? "in-view" : ""}`}
+                  style={{ transitionDelay: `${i * 100}ms` }}
+                >
+                  <Card
+                    className={`neo-lift group cursor-pointer transition-all hover:shadow-[7px_7px_0_var(--color-border)] active:shadow-[2px_2px_0_var(--color-border)] ${
+                      isCompleted ? "border-success" : ""
+                    }`}
+                    onClick={() => setExpandedMilestone(isExpanded ? null : ms.id)}
+                  >
+                    <CardContent className="p-5">
+                      <div className="flex items-start gap-4">
+                        <div
+                          className={`border-border mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center border-[2px] shadow-[2px_2px_0_var(--color-border)] transition-all duration-300 ${
+                            isCompleted ? "bg-success" : "bg-background group-hover:bg-secondary"
+                          }`}
+                        >
+                          {isCompleted ? (
+                            <CheckCircle2 className="h-4 w-4" />
+                          ) : (
+                            <Circle className="text-muted-foreground h-4 w-4" />
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-3">
+                            <h3
+                              className={`font-black ${isCompleted ? "text-muted-foreground" : ""}`}
+                            >
+                              {ms.title}
+                            </h3>
+                            <div className="flex flex-shrink-0 items-center gap-2">
+                              <Badge variant={isCompleted ? "success" : "default"}>
+                                {ms.rewardAmount} USDC
+                              </Badge>
+                              {isExpanded ? (
+                                <ChevronUp className="text-muted-foreground h-4 w-4" />
+                              ) : (
+                                <ChevronDown className="text-muted-foreground h-4 w-4" />
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Expanded content */}
+                          {isExpanded && (
+                            <div className="animate-fade-in-up mt-3">
+                              <p className="text-muted-foreground mb-3 text-sm">{ms.description}</p>
+                              {completedBy.length > 0 && (
+                                <div className="mb-3">
+                                  <p className="text-muted-foreground mb-2 text-xs font-bold">
+                                    Completed by:
+                                  </p>
+                                  <div className="flex flex-wrap gap-2">
+                                    {completedBy.map(addr => (
+                                      <span
+                                        key={addr}
+                                        className="bg-success/10 border-border border-[1.5px] px-2 py-1 font-mono text-xs font-bold shadow-[1px_1px_0_var(--color-border)]"
+                                      >
+                                        {addr}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {!isCompleted && enrollees.length > 0 && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="shimmer-on-hover"
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  Verify Completion
+                                </Button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              )
+            })
+          )}
         </div>
       )}
+
+      {/* Enrollees tab */}
+      {activeTab === "enrollees" && (
+        <div className="space-y-4">
+          {enrollees.length === 0 ? (
+            <Card className="animate-fade-in-up">
+              <CardContent className="flex flex-col items-center py-12 text-center">
+                <div className="bg-primary border-border mb-4 flex h-14 w-14 items-center justify-center border-[3px] shadow-[4px_4px_0_var(--color-border)]">
+                  <Users className="h-6 w-6" />
+                </div>
+                <h3 className="mb-2 font-black">No enrollees yet</h3>
+                <p className="text-muted-foreground mb-4 text-sm">Add learners to this quest.</p>
+                <Button size="sm" className="shimmer-on-hover">
+                  <UserPlus className="h-4 w-4" />
+                  Add Enrollee
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            enrollees.map((addr, i) => {
+              const completed = completions.filter(c => c.enrollee === addr && c.completed).length
+              const earned = milestones
+                .filter(m =>
+                  completions.some(
+                    c => c.enrollee === addr && c.milestoneId === m.id && c.completed
+                  )
+                )
+                .reduce((sum, m) => sum + m.rewardAmount, 0)
+              const isAllDone = completed === milestones.length && milestones.length > 0
+
+              return (
+                <div
+                  key={addr}
+                  className={`reveal-up ${contentInView ? "in-view" : ""}`}
+                  style={{ transitionDelay: `${i * 100}ms` }}
+                >
+                  <Card className="neo-lift group hover:shadow-[7px_7px_0_var(--color-border)] active:shadow-[2px_2px_0_var(--color-border)]">
+                    <CardContent className="p-5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="bg-primary border-border flex h-10 w-10 items-center justify-center border-[2px] font-mono text-sm font-black shadow-[2px_2px_0_var(--color-border)] transition-shadow group-hover:shadow-[3px_3px_0_var(--color-border)]">
+                            {addr.slice(0, 2)}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <p className="font-mono text-sm font-bold">{addr}</p>
+                              {isAllDone && <Sparkles className="text-primary h-3.5 w-3.5" />}
+                            </div>
+                            <p className="text-muted-foreground text-xs font-bold">
+                              {completed}/{milestones.length} milestones
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <Badge variant="success" className="tabular-nums">
+                            +{formatTokens(earned)} USDC
+                          </Badge>
+                          <p className="text-muted-foreground mt-1 text-xs font-bold">earned</p>
+                        </div>
+                      </div>
+                      {milestones.length > 0 && (
+                        <Progress value={completed} max={milestones.length} className="mt-4" />
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+              )
+            })
+          )}
+        </div>
+      )}
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
     </div>
   )
 }
-
-// End of QuestView
