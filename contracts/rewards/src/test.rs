@@ -309,12 +309,13 @@ fn test_authority_self_distribution() {
     client.fund_quest(&owner, &q_id, &5_000);
 
     // Authority distributes reward pool tokens back to themselves
-    client.distribute_reward(&owner, &q_id, &owner, &1_000);
+    let result = client.try_distribute_reward(&owner, &q_id, &owner, &1_000);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 
     let token_client = TokenClient::new(&env, &token_addr);
-    assert_eq!(token_client.balance(&owner), 6_000);
-    assert_eq!(client.get_pool_balance(&q_id), 4_000);
-    assert_eq!(client.get_user_earnings(&owner), 1_000);
+    assert_eq!(token_client.balance(&owner), 5_000);
+    assert_eq!(client.get_pool_balance(&q_id), 5_000);
+    assert_eq!(client.get_user_earnings(&owner), 0);
 }
 
 /// MED-01: No milestone linkage

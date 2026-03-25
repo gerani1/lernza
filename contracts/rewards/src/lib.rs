@@ -179,6 +179,10 @@ impl RewardsContract {
             return Err(Error::Unauthorized);
         }
 
+        if authority == enrollee {
+            return Err(Error::Unauthorized);
+        }
+
         // Check pool balance
         let pool_key = DataKey::QuestPool(quest_id);
         let pool: i128 = env.storage().persistent().get(&pool_key).unwrap_or(0);
