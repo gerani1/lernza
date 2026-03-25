@@ -34,7 +34,7 @@ interface QuestWithStats extends QuestInfo {
   isOwned: boolean
 }
 
-export function Dashboard({ onSelectWorkspace }: DashboardProps) {
+export function Dashboard({ onSelectQuest }: DashboardProps) {
   const { connected, connect, shortAddress, address } = useWallet()
   const [filter, setFilter] = useState<"all" | "owned" | "enrolled">("all")
   const [quests, setQuests] = useState<QuestWithStats[]>([])
