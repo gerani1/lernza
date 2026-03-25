@@ -20,16 +20,35 @@ import { formatTokens } from "@/lib/utils"
 import { questClient, type QuestInfo } from "@/lib/contracts/quest"
 
 interface DashboardProps {
-  onSelectQuest: (id: number) => void
+  onSelectWorkspace: (id: number) => void
+  onCreateQuest: () => void
 }
 
-interface QuestWithStats extends QuestInfo {
-  enrolleeCount: number
-  milestoneCount: number
-  poolBalance: bigint
-  completedCount: number
-  isOwned: boolean
-}
+export function Dashboard({ onSelectWorkspace, onCreateQuest }: DashboardProps) {
+  const { connected, connect, shortAddress } = useWallet()
+  const [filter, setFilter] = useState<"all" | "owned" | "enrolled">("all")
+
+  if (!connected) {
+    return (
+      <div className="min-h-[calc(100vh-67px)] flex items-center justify-center relative overflow-hidden">
+        {/* Background elements */}
+        <div className="absolute inset-0 bg-grid-dots pointer-events-none" />
+        <div className="absolute top-[10%] left-[8%] w-20 h-20 bg-primary border-[3px] border-black shadow-[4px_4px_0_#000] rotate-12 opacity-[0.08] animate-float" style={{ animationDuration: "8s" }} />
+        <div className="absolute bottom-[15%] right-[6%] w-14 h-14 bg-primary border-[2px] border-black shadow-[3px_3px_0_#000] -rotate-6 opacity-[0.1] animate-float" style={{ animationDuration: "6s", animationDelay: "1s" }} />
+        <div className="absolute top-[60%] left-[5%] w-10 h-10 bg-success border-[2px] border-black shadow-[2px_2px_0_#000] rotate-45 opacity-[0.06] animate-float" style={{ animationDuration: "7s", animationDelay: "2s" }} />
+        <div className="absolute top-[20%] right-[12%] w-8 h-8 bg-primary border-[2px] border-black opacity-[0.07] -rotate-12 animate-float" style={{ animationDuration: "9s", animationDelay: "0.5s" }} />
+
+        <div className="relative px-4 max-w-lg mx-auto">
+          {/* Card container */}
+          <div className="bg-white border-[3px] border-black shadow-[8px_8px_0_#000] overflow-hidden animate-scale-in">
+            {/* Yellow header strip */}
+            <div className="bg-primary border-b-[3px] border-black px-6 py-3 flex items-center justify-between">
+              <span className="text-xs font-black uppercase tracking-wider">Dashboard</span>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2.5 h-2.5 bg-destructive border border-black" />
+                <span className="text-xs font-bold">Not Connected</span>
+              </div>
+            </div>
 
 export function Dashboard({ onSelectQuest }: DashboardProps) {
   const { connected, connect, shortAddress, address } = useWallet()
@@ -118,6 +137,14 @@ export function Dashboard({ onSelectQuest }: DashboardProps) {
               </div>
             </div>
           </div>
+          <Button
+            variant="secondary"
+            onClick={onCreateQuest}
+            className="shimmer-on-hover group flex-shrink-0"
+          >
+            <Plus className="h-4 w-4" />
+            New Quest
+          </Button>
         </div>
       ) : (
         <div className="space-y-8 animate-fade-in">
@@ -253,9 +280,36 @@ export function Dashboard({ onSelectQuest }: DashboardProps) {
                       </p>
                    </div>
                 )}
-             </div>
-          )}
-        </div>
+              </CardContent>
+            </Card>
+          )
+        })}
+      </div>
+
+      {filteredWorkspaces.length === 0 && (
+        <Card className="animate-fade-in-up">
+          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="w-16 h-16 bg-primary border-[3px] border-black shadow-[4px_4px_0_#000] flex items-center justify-center mb-6">
+              <Search className="h-6 w-6" />
+            </div>
+            <h3 className="font-black text-lg mb-2">
+              {filter === "all" ? "No quests yet" : `No ${filter} quests`}
+            </h3>
+            <p className="text-sm text-muted-foreground mb-6 max-w-sm">
+              {filter === "all"
+                ? "Create your first quest to start incentivizing learning with on-chain rewards."
+                : filter === "owned"
+                  ? "You haven't created any quests yet. Start one to incentivize learners."
+                  : "You haven't enrolled in any quests yet. Browse available quests to get started."}
+            </p>
+            {filter === "all" || filter === "owned" ? (
+              <Button onClick={onCreateQuest} className="shimmer-on-hover">
+                <Plus className="h-4 w-4" />
+                Create Quest
+              </Button>
+            ) : null}
+          </CardContent>
+        </Card>
       )}
     </div>
   )
