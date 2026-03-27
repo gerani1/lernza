@@ -53,6 +53,8 @@ import { questClient, QuestStatus, Visibility } from "@/lib/contracts/quest"
 import { milestoneClient, type MilestoneInfo } from "@/lib/contracts/milestone-client"
 import { rewardsClient } from "@/lib/contracts/rewards"
 import { useTransactionAction } from "@/hooks/use-transaction-action"
+import { validateQuestId, isValidQuestId } from "@/lib/quest-validation"
+import { QuestValidationError } from "@/components/quest-validation-states"
 
 const milestoneFormSchema = z.object({
   title: z.string().min(1, "Title is required").max(100, "Max 100 characters"),
@@ -130,8 +132,9 @@ const truncateAddress = (address: string) => {
 
 export function QuestView() {
   const { id } = useParams()
-  const questId = Number(id)
   const navigate = useNavigate()
+
+  // Call all hooks BEFORE any conditional returns
   const [activeTab, setActiveTab] = useState<Tab>("milestones")
   const [expandedMilestone, setExpandedMilestone] = useState<number | null>(null)
   const [showAddEnrollee, setShowAddEnrollee] = useState(false)
@@ -181,7 +184,11 @@ export function QuestView() {
     defaultValues: { address: "" },
   })
 
-  // Use individual hooks for quest data
+  // Validate quest ID
+  const validationState = validateQuestId(id)
+
+  // Use individual hooks for quest data - must be called before any returns
+  const questId = isValidQuestId(validationState) ? validationState.questId : -1
   const questData = useQuest(questId)
   const milestonesData = useMilestones(questId)
   const enrolleesData = useEnrollees(questId)
@@ -199,6 +206,7 @@ export function QuestView() {
     questData.error || milestonesData.error || enrolleesData.error || poolBalanceData.error
 
   // Refetch function that refreshes all data
+
   const refetch = useCallback(async () => {
     await Promise.all([
       questData.refetch(),
@@ -284,31 +292,36 @@ export function QuestView() {
         .filter(milestone => viewerCompletedMilestoneIds.has(milestone.id))
         .reduce((sum, milestone) => sum + toSafeNumber(milestone.rewardAmount), 0)
 
-  const totalReward = milestones.reduce(
-    (sum, milestone) => sum + toSafeNumber(milestone.rewardAmount),
-    0
-  )
   const isComplete = completedMilestones === milestones.length && milestones.length > 0
 
   const [statsRef, statsInView] = useInView()
   const [contentRef, contentInView] = useInView()
 
+  // We need to call useCountUp before any conditional returns
   const enrolleesCount = useCountUp(enrollees.length, 400, statsInView)
   const milestonesCount = useCountUp(milestones.length, 400, statsInView)
   const poolBalanceCount = useCountUp(toSafeNumber(poolBalance), 800, statsInView)
-  const totalRewardCount = useCountUp(totalReward, 800, statsInView)
+
+  // Calculate totalReward early so we can use it in useCountUp
+  const totalRewardEarly = milestones.reduce(
+    (sum, milestone) => sum + toSafeNumber(milestone.rewardAmount),
+    0
+  )
+  const totalRewardCount = useCountUp(totalRewardEarly, 800, statsInView)
+
+  // Define all callbacks BEFORE any conditional returns
 
   const resetMilestoneForm = useCallback(() => {
     milestoneForm.reset()
     setShowMilestoneForm(false)
-  }, [milestoneForm])
+  }, [])
 
   const closeAddEnrollee = useCallback(() => {
     setShowAddEnrollee(false)
     enrolleeForm.reset()
     addEnrolleeTx.reset()
     setAddPhase("idle")
-  }, [addEnrolleeTx, enrolleeForm])
+  }, [])
 
   useEffect(() => {
     if (!quest || quest.deadline <= 0 || isExpiredDeadline(quest.deadline)) {
@@ -763,6 +776,65 @@ export function QuestView() {
     setImportedData(null)
     addToast("Quest data loaded. Complete the creation process.", "success")
   }, [addToast, importedData, navigate])
+
+  // Fetch completions when milestones and enrollees are available
+  useEffect(() => {
+    const fetchCompletions = async () => {
+      if (milestones.length > 0 && enrollees.length > 0) {
+        try {
+          const completionEntries = await Promise.all(
+            enrollees.flatMap(enrollee =>
+              milestones.map(async milestone => {
+                const completed = await milestoneClient.isCompleted(questId, milestone.id, enrollee)
+                return completed
+                  ? ({
+                      milestoneId: milestone.id,
+                      enrollee,
+                      completed: true,
+                    } satisfies CompletionRecord)
+                  : null
+              })
+            )
+          )
+
+          const filteredCompletions = completionEntries.filter(
+            (entry): entry is CompletionRecord => entry !== null
+          )
+          setCompletions(filteredCompletions)
+        } catch (error) {
+          console.error("Failed to fetch completions:", error)
+        }
+      } else {
+        setCompletions(EMPTY_COMPLETIONS)
+      }
+    }
+
+    fetchCompletions()
+  }, [questId, milestones, enrollees])
+
+  // Show validation error if ID is invalid - AFTER all hooks
+  if (!isValidQuestId(validationState)) {
+    return <QuestValidationError state={validationState} />
+  }
+
+  const isOwner = !!address && quest?.owner === address
+  const isEnrolled = !!address && enrollees.includes(address)
+
+  const viewerCompletedMilestoneIds = new Set(
+    completions
+      .filter(completion => completion.enrollee === address)
+      .map(completion => completion.milestoneId)
+  )
+  const completedMilestones = isOwner
+    ? new Set(completions.map(completion => completion.milestoneId)).size
+    : viewerCompletedMilestoneIds.size
+  const earnedReward = isOwner
+    ? 0
+    : milestones
+        .filter(milestone => viewerCompletedMilestoneIds.has(milestone.id))
+        .reduce((sum, milestone) => sum + toSafeNumber(milestone.rewardAmount), 0)
+
+  const isComplete = completedMilestones === milestones.length && milestones.length > 0
 
   if (isLoading) {
     return (
