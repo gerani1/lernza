@@ -18,8 +18,6 @@ import {
   FileText,
   Sparkles,
   AlertCircle,
-  Eye,
-  X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -52,6 +50,8 @@ const step1Schema = z.object({
     .min(1, "Description is required")
     .max(MAX_QUEST_DESCRIPTION_LEN, `Max ${MAX_QUEST_DESCRIPTION_LEN} characters`),
   maxEnrollees: z.number().int().min(1, "Must be at least 1").optional().or(z.literal("")),
+  deadlineEnabled: z.boolean().default(false),
+  deadlineAt: z.string().optional(),
 })
 type Step1Values = z.infer<typeof step1Schema>
 
@@ -112,6 +112,13 @@ function clearDraft() {
   localStorage.removeItem(DRAFT_KEY)
 }
 
+function getDefaultDeadlineInput() {
+  const date = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+  const offset = date.getTimezoneOffset()
+  const local = new Date(date.getTime() - offset * 60 * 1000)
+  return local.toISOString().slice(0, 16)
+}
+
 // ─── Helper components ────────────────────────────────────────────────────────
 
 function StepIndicator({ current }: { current: FormStep }) {
@@ -166,14 +173,24 @@ function Step1Form({
     control,
     register,
     handleSubmit,
+    setValue,
     formState: { errors },
-  } = useForm<Step1Values>({
+  } = useForm<z.input<typeof step1Schema>, undefined, Step1Values>({
     resolver: zodResolver(step1Schema),
     defaultValues,
   })
 
   const nameValue = useWatch({ control, name: "name" }) ?? ""
   const descValue = useWatch({ control, name: "description" }) ?? ""
+  const deadlineEnabled = useWatch({ control, name: "deadlineEnabled" }) ?? false
+
+  useEffect(() => {
+    if (deadlineEnabled) {
+      setValue("deadlineAt", defaultValues.deadlineAt || getDefaultDeadlineInput(), {
+        shouldDirty: true,
+      })
+    }
+  }, [deadlineEnabled, defaultValues.deadlineAt, setValue])
 
   return (
     <form onSubmit={handleSubmit(onNext)} className="space-y-6">
@@ -262,6 +279,40 @@ function Step1Form({
             </p>
             <FieldError message={errors.maxEnrollees?.message} />
           </div>
+
+          <div>
+            <label className="flex items-start gap-3 text-sm font-bold">
+              <input
+                {...register("deadlineEnabled")}
+                type="checkbox"
+                className="mt-1 h-4 w-4 accent-black"
+              />
+              <span>
+                Set quest deadline
+                <span className="text-muted-foreground block text-xs font-medium">
+                  Optional. New quests default to no expiry until you enable this.
+                </span>
+              </span>
+            </label>
+          </div>
+
+          {deadlineEnabled && (
+            <div>
+              <FormLabel>Deadline</FormLabel>
+              <input
+                {...register("deadlineAt")}
+                type="datetime-local"
+                className={cn(
+                  "border-border bg-background w-full border-[2px] px-4 py-2.5 text-sm font-medium transition-shadow focus:shadow-[3px_3px_0_var(--color-border)] focus:outline-none",
+                  errors.deadlineAt && "border-destructive"
+                )}
+              />
+              <p className="text-muted-foreground mt-1 text-xs font-bold">
+                Learners will see this deadline on quest cards and the workspace page.
+              </p>
+              <FieldError message={errors.deadlineAt?.message} />
+            </div>
+          )}
         </div>
       </div>
 
@@ -511,151 +562,6 @@ function Step2Form({
   )
 }
 
-// ─── Quest Preview Modal Component ──────────────────────────────────────────────
-interface QuestPreviewModalProps {
-  isOpen: boolean
-  onClose: () => void
-  questData: {
-    name: string
-    description: string
-    milestones: Array<{
-      title: string
-      description: string
-      rewardAmount: number
-      requiresPrevious: boolean
-    }>
-    maxEnrollees?: number
-  }
-}
-
-function QuestPreviewModal({ isOpen, onClose, questData }: QuestPreviewModalProps) {
-  // Handle ESC key to close modal
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose()
-      }
-    }
-
-    if (isOpen) {
-      document.addEventListener("keydown", handleKeyDown)
-      return () => {
-        document.removeEventListener("keydown", handleKeyDown)
-      }
-    }
-  }, [isOpen, onClose])
-
-  if (!isOpen) return null
-
-  // Calculate total reward
-  const totalReward = questData.milestones.reduce((sum: number, m) => sum + m.rewardAmount, 0)
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-background border-border max-h-[90vh] w-full max-w-2xl overflow-auto border-[3px] shadow-[8px_8px_0_var(--color-border)]">
-        <div className="flex items-center justify-between border-b-[2px] p-6">
-          <h2 className="text-xl font-black">Quest Preview</h2>
-          <button
-            onClick={onClose}
-            className="text-muted-foreground hover:text-foreground hover:bg-muted rounded border-[2px] p-2"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="p-6">
-          {/* Quest Header */}
-          <div className="bg-primary border-border mb-4 border-b-[3px] p-4">
-            <h3 className="text-lg font-black">{questData.name}</h3>
-            <p className="text-muted-foreground mt-2">{questData.description}</p>
-            <div className="mt-3 flex items-center gap-2">
-              <Badge
-                variant="default"
-                className="bg-secondary text-foreground border-border ml-2 border-[1px] px-2 text-[10px]"
-              >
-                Public
-              </Badge>
-              {questData.maxEnrollees && (
-                <span className="text-muted-foreground text-sm">
-                  Max {questData.maxEnrollees} learners
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Milestones */}
-          <div className="space-y-4">
-            <h4 className="text-muted-foreground mb-3 text-xs font-black tracking-wider uppercase">
-              Milestones ({questData.milestones.length})
-            </h4>
-            <div className="space-y-3">
-              {questData.milestones.map((milestone, index) => (
-                <div
-                  key={index}
-                  className="bg-secondary border-border flex items-start justify-between gap-3 border-[1.5px] p-3"
-                >
-                  <div className="flex items-center gap-2">
-                    <div className="bg-primary border-border mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center border-[1.5px] text-[10px] font-black">
-                      {index + 1}
-                    </div>
-                    <div>
-                      <p className="text-sm font-black">{milestone.title}</p>
-                      <p className="text-muted-foreground mt-0.5 text-xs">
-                        {milestone.description}
-                      </p>
-                      {milestone.requiresPrevious && index > 0 && (
-                        <p className="text-muted-foreground mt-1 text-[10px] font-bold uppercase">
-                          Sequential
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <Badge variant="default" className="flex-shrink-0 tabular-nums">
-                    {milestone.rewardAmount} USDC
-                  </Badge>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Reward Pool */}
-          <div className="bg-primary border-border border-[2px] p-4">
-            <h4 className="text-muted-foreground mb-3 text-xs font-black tracking-wider uppercase">
-              Reward Pool
-            </h4>
-            <div className="bg-primary border-border mb-4 flex items-center justify-between border-[2px] p-4 shadow-[3px_3px_0_var(--color-border)]">
-              <div className="flex items-center gap-2">
-                <Coins className="h-5 w-5" />
-                <span className="font-black">Total USDC needed</span>
-              </div>
-              <span className="text-xl font-black tabular-nums">
-                {formatTokens(totalReward)} USDC
-              </span>
-            </div>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="mt-6 flex justify-end gap-3">
-            <Button variant="outline" onClick={onClose} className="shimmer-on-hover">
-              Back to Edit
-            </Button>
-            <Button
-              onClick={() => {
-                onClose()
-                // In a real implementation, this would trigger the actual submission
-                console.log("Quest submission would happen here")
-              }}
-              className="shimmer-on-hover"
-            >
-              Looks good, submit
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ─── Step 3: Fund & Review ────────────────────────────────────────────────────
 
 function Step3Review({
@@ -670,13 +576,12 @@ function Step3Review({
   onComplete: () => void
 }) {
   const { isSupportedNetwork, address } = useWallet()
-  const fundingTx = useTransactionAction()
-  const createTx = useTransactionAction()
+  const submitTx = useTransactionAction()
 
   const [questId, setQuestId] = useState<number | null>(null)
   const [createQuestTxHash, setCreateQuestTxHash] = useState<string | null>(null)
+  const [deadlineTxHash, setDeadlineTxHash] = useState<string | null>(null)
   const [fundTxHash, setFundTxHash] = useState<string | null>(null)
-  const [showPreview, setShowPreview] = useState(false)
 
   const totalReward = step2Data.milestones.reduce(
     (sum: number, m: z.infer<typeof milestoneSchema>) => sum + m.rewardAmount,
@@ -699,10 +604,10 @@ function Step3Review({
     }
   }
 
-  const handleFund = async () => {
+  const handleCreateAndFund = async () => {
     if (!address) throw new Error("Connect wallet first")
 
-    await fundingTx.run(async () => {
+    await submitTx.run(async () => {
       const category = "General"
       const tags: string[] = []
       const tokenAddr = import.meta.env.VITE_REWARDS_TOKEN_CONTRACT_ID || ""
@@ -732,6 +637,19 @@ function Step3Review({
       setQuestId(createdQuestId)
       setCreateQuestTxHash(createResult.txHash)
 
+      if (step1Data.deadlineEnabled && step1Data.deadlineAt) {
+        const deadline = Math.floor(new Date(step1Data.deadlineAt).getTime() / 1000)
+        if (!Number.isFinite(deadline) || deadline <= Date.now() / 1000) {
+          throw new Error("Deadline must be a valid future date.")
+        }
+
+        const deadlineResult = await questClient.setDeadline(address, createdQuestId, deadline)
+        if (deadlineResult.status !== "SUCCESS") {
+          throw new Error(deadlineResult.error ?? "Deadline transaction failed")
+        }
+        setDeadlineTxHash(deadlineResult.txHash)
+      }
+
       for (const [index, m] of step2Data.milestones.entries()) {
         const msResult = await milestoneClient.createMilestone(
           address,
@@ -755,130 +673,15 @@ function Step3Review({
       return {
         questId: createdQuestId,
         createQuestTxHash: createResult.txHash,
+        deadlineTxHash,
         fundTxHash: fundResult.txHash,
       }
     })
-  }
-
-  const handleCreate = async () => {
-    if (!address) {
-      throw new Error("Wallet not connected")
-    }
-
-    await createTx.run(async () => {
-      try {
-        // Step 1: Create the quest on-chain
-        // TODO: Add VITE_USDC_TOKEN_ADDRESS to environment variables
-        const tokenAddress =
-          import.meta.env.VITE_USDC_TOKEN_ADDRESS ||
-          "CDLZFC3SYJYDZXTEVRXTHNKVYKKEFZQJ2HW4QGHZ3KIZZMJDJPTKJ7QG"
-        if (!tokenAddress) {
-          throw new Error("USDC token address not configured")
-        }
-
-        const questResult = await questClient.createQuest(
-          address,
-          step1Data.name,
-          step1Data.description,
-          "Education", // Education category
-          [], // Tags
-          tokenAddress,
-          Visibility.Public,
-          typeof step1Data.maxEnrollees === "number" ? step1Data.maxEnrollees : undefined
-        )
-
-        if (questResult.status !== "SUCCESS") {
-          throw new Error(`Quest creation failed: ${questResult.error}`)
-        }
-
-        // Extract quest ID from the result (this may need adjustment based on actual contract response)
-        // For now, we'll assume we can get the quest ID from the result or need to query it
-        let questId: number
-        try {
-          // Try to get the latest quest ID (assuming the new quest is the last one)
-          const questCount = await questClient.getQuestCount()
-          questId = questCount - 1 // New quest should be at index count-1
-        } catch (error) {
-          console.error("Failed to get quest ID:", error)
-          throw new Error("Failed to retrieve created quest ID")
-        }
-
-        // Step 2: Create milestones for the quest
-        const milestoneResults = []
-        const failedMilestones = []
-
-        for (let i = 0; i < step2Data.milestones.length; i++) {
-          const milestone = step2Data.milestones[i]
-          try {
-            const result = await milestoneClient.createMilestone(
-              address,
-              questId,
-              milestone.title,
-              milestone.description,
-              BigInt(Math.floor(milestone.rewardAmount * 1_000_000)), // Convert to USDC smallest unit (6 decimals)
-              milestone.requiresPrevious && i > 0
-            )
-
-            if (result.status !== "SUCCESS") {
-              failedMilestones.push({
-                index: i,
-                title: milestone.title,
-                error: result.error || "Unknown transaction error",
-              })
-              milestoneResults.push({ index: i, status: "FAILED", result })
-            } else {
-              milestoneResults.push({ index: i, status: "SUCCESS", result })
-            }
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : "Unknown error"
-            failedMilestones.push({
-              index: i,
-              title: milestone.title,
-              error: errorMessage,
-            })
-            milestoneResults.push({
-              index: i,
-              status: "FAILED",
-              error: errorMessage,
-            })
-          }
-        }
-
-        // Handle partial failure cases
-        if (failedMilestones.length > 0) {
-          const successCount = step2Data.milestones.length - failedMilestones.length
-          const errorMessages = failedMilestones
-            .map(f => `Milestone ${f.index + 1} ("${f.title}"): ${f.error}`)
-            .join("; ")
-
-          if (successCount === 0) {
-            // All milestones failed - treat as complete failure
-            throw new Error(
-              `Quest created successfully, but all milestone creations failed: ${errorMessages}`
-            )
-          } else {
-            // Some milestones failed - partial success with detailed error
-            throw new Error(
-              `Quest created successfully with ${successCount}/${step2Data.milestones.length} milestones. ` +
-                `Failed milestones: ${errorMessages}. ` +
-                `You may need to manually create the remaining milestones.`
-            )
-          }
-        }
-
-        return true
-      } catch (error) {
-        console.error("Quest creation error:", error)
-        throw error
-      }
-    })
-
     onComplete()
   }
 
-  const isFunded = fundingTx.isSuccess
-  const fundPending = fundingTx.isPending
-  const createPending = createTx.isPending
+  const isSubmitted = submitTx.isSuccess
+  const submitPending = submitTx.isPending
 
   return (
     <div className="space-y-6">
@@ -899,6 +702,11 @@ function Step3Review({
             </p>
             <h3 className="text-xl font-black">{step1Data.name}</h3>
             <p className="text-muted-foreground text-sm">{step1Data.description}</p>
+            {step1Data.deadlineEnabled && step1Data.deadlineAt && (
+              <p className="text-muted-foreground text-xs font-bold">
+                Deadline: {new Date(step1Data.deadlineAt).toLocaleString()}
+              </p>
+            )}
           </div>
 
           {/* Milestones list */}
@@ -912,7 +720,7 @@ function Step3Review({
                   key={i}
                   className="bg-secondary border-border flex items-start justify-between gap-3 border-[1.5px] p-3"
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-start gap-2">
                     <div className="bg-primary border-border mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center border-[1.5px] text-[10px] font-black">
                       {i + 1}
                     </div>
@@ -959,66 +767,31 @@ function Step3Review({
               </div>
             )}
 
-            {/* Quest Preview Modal */}
-            <QuestPreviewModal
-              isOpen={showPreview}
-              onClose={() => setShowPreview(false)}
-              questData={{
-                name: step1Data.name,
-                description: step1Data.description,
-                milestones: step2Data.milestones,
-                maxEnrollees: step1Data.maxEnrollees,
-              }}
-            />
-
-            {/* Fund button */}
             <Button
-              onClick={handleFund}
-              disabled={fundPending || createPending || isFunded || !isSupportedNetwork}
-              variant={isFunded || createPending || createTx.isSuccess ? "secondary" : "default"}
-              className={cn(
-                "shimmer-on-hover mb-3 w-full",
-                (isFunded || createPending || createTx.isSuccess) && "border-success"
-              )}
+              onClick={handleCreateAndFund}
+              disabled={submitPending || isSubmitted || !isSupportedNetwork}
+              variant={isSubmitted ? "secondary" : "default"}
+              className={cn("shimmer-on-hover mb-3 w-full", isSubmitted && "border-success")}
             >
-              {fundPending ? (
+              {submitPending ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Funding reward pool...
+                  Creating and funding quest...
                 </>
-              ) : isFunded || createPending || createTx.isSuccess ? (
+              ) : isSubmitted ? (
                 <>
                   <Check className="h-4 w-4" />
-                  Reward pool funded
-                </>
-              ) : (
-                <>
-                  <Coins className="h-4 w-4" />
-                  Fund Reward Pool ({formatTokens(totalReward)} USDC)
-                </>
-              )}
-            </Button>
-
-            {/* Create button */}
-            <Button
-              onClick={handleCreate}
-              disabled={!isFunded || createPending || !isSupportedNetwork}
-              className="shimmer-on-hover w-full"
-            >
-              {createPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Creating quest on-chain...
+                  Quest created and funded
                 </>
               ) : (
                 <>
                   <Sparkles className="h-4 w-4" />
-                  Confirm & Create Quest
+                  Create & Fund Quest ({formatTokens(totalReward)} USDC)
                 </>
               )}
             </Button>
 
-            {isFunded && questId !== null && (
+            {isSubmitted && questId !== null && (
               <div className="bg-secondary mt-3 border-[2px] border-black p-3 text-xs font-bold">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-muted-foreground">Quest ID</span>
@@ -1030,6 +803,12 @@ function Step3Review({
                     <span className="font-mono">{createQuestTxHash.slice(0, 8)}…</span>
                   </div>
                 )}
+                {deadlineTxHash && (
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">Deadline tx</span>
+                    <span className="font-mono">{deadlineTxHash.slice(0, 8)}…</span>
+                  </div>
+                )}
                 {fundTxHash && (
                   <div className="mt-1 flex items-center justify-between gap-2">
                     <span className="text-muted-foreground">Fund tx</span>
@@ -1039,24 +818,20 @@ function Step3Review({
               </div>
             )}
 
-            {fundingTx.isFailure && (
+            {submitTx.isFailure && (
               <p className="text-destructive mt-2 text-center text-xs font-bold">
-                {fundingTx.error ?? "Funding failed. Try again."}
+                {submitTx.error ?? "Quest creation failed. Try again."}
               </p>
             )}
-            {createTx.isFailure && (
-              <p className="text-destructive mt-2 text-center text-xs font-bold">
-                {createTx.error ?? "Creation failed. Try again."}
-              </p>
-            )}
-            {!isFunded && !fundPending && (
+            {!isSubmitted && !submitPending && (
               <p className="text-muted-foreground mt-2 text-center text-xs font-bold">
-                Fund the pool first, then confirm to create the quest on Stellar.
+                One action will create the quest, apply the deadline, add milestones, and fund the
+                reward pool.
               </p>
             )}
-            {isFunded && !createPending && (
+            {isSubmitted && !submitPending && (
               <p className="text-muted-foreground mt-2 text-center text-xs font-bold">
-                Pool funded! Sign the creation transaction to go live.
+                Quest created successfully on Stellar.
               </p>
             )}
           </div>
@@ -1064,21 +839,7 @@ function Step3Review({
       </div>
 
       <div className="flex items-center justify-between">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={handlePreviewClose}
-          className="shimmer-on-hover"
-        >
-          <Eye className="h-4 w-4" />
-          Preview
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onBack}
-          disabled={fundPending || createPending}
-        >
+        <Button type="button" variant="outline" onClick={onBack} disabled={submitPending}>
           <ArrowLeft className="h-4 w-4" />
           Back
         </Button>
@@ -1089,7 +850,13 @@ function Step3Review({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-const DEFAULT_STEP1: Step1Values = { name: "", description: "", maxEnrollees: "" }
+const DEFAULT_STEP1: Step1Values = {
+  name: "",
+  description: "",
+  maxEnrollees: "",
+  deadlineEnabled: false,
+  deadlineAt: getDefaultDeadlineInput(),
+}
 const DEFAULT_STEP2: Step2Values = {
   milestones: [{ title: "", description: "", rewardAmount: 0, requiresPrevious: false }],
 }
@@ -1118,7 +885,13 @@ export function CreateQuest() {
       }
 
       // Override with imported data
-      initialStep1Data = { name: imported.name, description: imported.description }
+      initialStep1Data = {
+        name: imported.name,
+        description: imported.description,
+        maxEnrollees: "",
+        deadlineEnabled: false,
+        deadlineAt: getDefaultDeadlineInput(),
+      }
       initialStep2Data = {
         milestones: imported.milestones.map(milestone => ({
           ...milestone,
