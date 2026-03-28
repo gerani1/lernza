@@ -50,7 +50,9 @@ export class QuestClient {
         this.contract = new Contract(CONTRACT_ID)
       } catch {
         this.contract = null
-        console.error(`[QuestClient] Invalid VITE_QUEST_CONTRACT_ID: "${CONTRACT_ID}"`)
+        if (import.meta.env.DEV) {
+          console.error(`[QuestClient] Invalid VITE_QUEST_CONTRACT_ID: "${CONTRACT_ID}"`)
+        }
       }
     } else {
       this.contract = null
@@ -392,7 +394,9 @@ export class QuestClient {
         return scValToNative(response.result.retval)
       }
     } catch (e: unknown) {
-      console.error(`Read error ${method}:`, e)
+      if (import.meta.env.DEV) {
+        console.error(`Read error ${method}:`, e)
+      }
     }
     return null
   }

@@ -21,6 +21,8 @@ import { Badge } from "@/components/ui/badge"
 import { useWallet } from "@/hooks/use-wallet"
 import { useContractData } from "@/hooks/use-async-data"
 import { useUserRole } from "@/hooks/use-user-role"
+import { useToast } from "@/hooks/use-toast"
+import { ToastContainer } from "@/components/toast"
 import { formatTokens } from "@/lib/utils"
 import { rewardsClient } from "@/lib/contracts/rewards"
 import { questClient } from "@/lib/contracts/quest"
@@ -90,6 +92,7 @@ export function Profile() {
   const [activityError, setActivityError] = useState<string | null>(null)
   const [nextActivityCursor, setNextActivityCursor] = useState<string | null>(null)
   const { role, isLoading: roleLoading } = useUserRole()
+  const { toasts, addToast, removeToast } = useToast()
 
   // Use the new async hook for earnings data
   const {
@@ -160,7 +163,9 @@ export function Profile() {
             totalPoolBalance += balance
             return { ...q, enrolleesCount: enrollees.length, poolBalance: balance }
           } catch (err) {
-            console.error(`Failed to fetch stats for quest ${q.id}:`, err)
+            if (import.meta.env.DEV) {
+              console.error(`Failed to fetch stats for quest ${q.id}:`, err)
+            }
             return { ...q, enrolleesCount: 0, poolBalance: 0n }
           }
         })
@@ -762,6 +767,7 @@ export function Profile() {
           </div>
         )}
       </div>
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
     </div>
   )
 }

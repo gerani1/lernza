@@ -922,6 +922,8 @@ const DEFAULT_STEP2: Step2Values = {
 export function CreateQuest() {
   const navigate = useNavigate()
   const { connected, connect, loading } = useWallet()
+  const { toasts, addToast, removeToast } = useToast()
+  const [importError, setImportError] = useState(false)
 
   // Check for imported quest data on mount and initialize state
   let initialStep1Data: Step1Values = loadDraft()?.step1Data ?? DEFAULT_STEP1
@@ -955,13 +957,23 @@ export function CreateQuest() {
       // Clear the imported data so it doesn't persist
       localStorage.removeItem("lernza:imported-quest")
     }
-  } catch (err) {
-    console.error("Failed to load imported quest:", err)
+  } catch (error) {
+    if (import.meta.env.DEV) {
+      console.error("Failed to load imported quest:", error)
+    }
+    if (!importError) setImportError(true)
   }
 
   const [step, setStep] = useState<FormStep>(initialStep)
   const [step1Data, setStep1Data] = useState<Step1Values>(initialStep1Data)
   const [step2Data, setStep2Data] = useState<Step2Values>(initialStep2Data)
+
+  useEffect(() => {
+    if (importError) {
+      addToast("Failed to load the imported draft quest.", "error")
+      setImportError(false)
+    }
+  }, [importError, addToast])
 
   useEffect(() => {
     saveDraft({ step, step1Data, step2Data })
@@ -1088,6 +1100,8 @@ export function CreateQuest() {
           />
         )}
       </div>
+
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
     </div>
   )
 }

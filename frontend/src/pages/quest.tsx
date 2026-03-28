@@ -256,7 +256,10 @@ export function QuestView() {
         )
         setCompletions(filteredCompletions)
       } catch (error) {
-        console.error("Failed to fetch completions:", error)
+        if (import.meta.env.DEV) {
+          console.error("Failed to fetch completions:", error)
+        }
+        addToast("Failed to load learner progress.", "error")
       }
     } else {
       setCompletions(EMPTY_COMPLETIONS)
