@@ -1375,7 +1375,8 @@ fn test_refund_pool_success() {
     quest_client.archive_quest(&q_id);
 
     // Advance time by 7 days + 1 second
-    env.ledger().set_timestamp(env.ledger().timestamp() + 604_800 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 604_800 + 1);
 
     let token_client = TokenClient::new(&env, &token_addr);
     let balance_before = token_client.balance(&owner);
@@ -1418,7 +1419,8 @@ fn test_refund_pool_full_balance() {
 
     client.fund_quest(&owner, &q_id, &5_000);
     quest_client.archive_quest(&q_id);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 604_800 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 604_800 + 1);
     client.refund_pool(&owner, &q_id, &5_000);
 
     assert_eq!(client.get_pool_balance(&q_id), 0);
@@ -1499,7 +1501,8 @@ fn test_refund_pool_unauthorized() {
 
     client.fund_quest(&owner, &q_id, &5_000);
     quest_client.archive_quest(&q_id);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 604_800 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 604_800 + 1);
 
     // Non-authority should be rejected
     let result = client.try_refund_pool(&attacker, &q_id, &1_000);
@@ -1538,7 +1541,8 @@ fn test_refund_pool_insufficient_balance() {
 
     client.fund_quest(&owner, &q_id, &1_000);
     quest_client.archive_quest(&q_id);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 604_800 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 604_800 + 1);
 
     // Requesting more than the pool holds
     let result = client.try_refund_pool(&owner, &q_id, &5_000);
@@ -1655,7 +1659,8 @@ fn test_refund_pool_grace_period_enforced() {
     assert_eq!(result, Err(Ok(Error::RefundWindowNotOpen)));
 
     // 6.9 days — should fail
-    env.ledger().set_timestamp(env.ledger().timestamp() + 604_800 - 3600 - 10);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 604_800 - 3600 - 10);
     let result = client.try_refund_pool(&owner, &q_id, &1_000);
     assert_eq!(result, Err(Ok(Error::RefundWindowNotOpen)));
 
@@ -1715,7 +1720,8 @@ fn test_refund_pool_respects_reserved_obligations() {
 
     // Archive and wait
     quest_client.archive_quest(&q_id);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 604_800 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 604_800 + 1);
 
     // Try to refund 4,000 (shoud fail, only 3,000 refundable)
     let result = client.try_refund_pool(&owner, &q_id, &4_000);

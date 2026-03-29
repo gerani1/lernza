@@ -510,7 +510,7 @@ impl MilestoneContract {
             .ok_or(Error::NotFound)?;
 
         Self::ensure_previous_completed(&env, quest_id, milestone_id, &enrollee, &milestone)?;
- 
+
         let comp_key = DataKey::Completed(quest_id, milestone_id, enrollee.clone());
         if env.storage().persistent().has(&comp_key) {
             return Err(Error::AlreadyCompleted);
@@ -521,10 +521,9 @@ impl MilestoneContract {
         if !env.storage().persistent().has(&submit_key) {
             let reserved_key = DataKey::TotalReservedReward(quest_id);
             let current_reserved: i128 = env.storage().persistent().get(&reserved_key).unwrap_or(0);
-            env.storage().persistent().set(
-                &reserved_key,
-                &(current_reserved + milestone.reward_amount),
-            );
+            env.storage()
+                .persistent()
+                .set(&reserved_key, &(current_reserved + milestone.reward_amount));
         }
 
         // Determine reward based on distribution mode
